@@ -2,14 +2,23 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Necro Slayer Flat</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>Necro Slayer — Retro PS1/PS2</title>
 <link rel="stylesheet" href="styles.css"/>
 </head>
 <body>
 <canvas id="game"></canvas>
 <div id="hud">
-  <div class="panel"><b>HP</b> <span id="hp">100</span> | <b>Kills</b> <span id="kills">0</span></div>
+  <div class="panel">
+    <b>HP</b> <span id="hp">100</span> |
+    <b>Kills</b> <span id="kills">0</span> |
+    <b>Wave</b> <span id="wave">1</span> |
+    <b>Mode</b> <span id="mode">ON FOOT</span>
+  </div>
+  <div class="btns">
+    <button id="btnShoot">Shoot</button>
+    <button id="btnEnter">Enter Car</button>
+  </div>
 </div>
 <script src="app.js"></script>
 </body>
