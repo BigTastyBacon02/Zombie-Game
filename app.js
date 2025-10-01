@@ -1,183 +1,164 @@
 
-// Retro survival game: move+shoot, zombies, parallax bg, drivable Trans Am.
-// All assets are flat files in repo root.
+const canvas=document.getElementById('game'); const ctx=canvas.getContext('2d',{alpha:false});
+function resize(){canvas.width=innerWidth; canvas.height=innerHeight;} addEventListener('resize',resize); resize();
 
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d', { alpha:false });
-function resize(){ canvas.width = innerWidth; canvas.height = innerHeight; } addEventListener('resize', resize); resize();
+const HUD={hp:document.getElementById('hp'),kills:document.getElementById('kills'),wave:document.getElementById('wave'),weapon:document.getElementById('weapon')};
 
-const HUD = { hp:document.getElementById('hp'), kills:document.getElementById('kills'), wave:document.getElementById('wave'), mode:document.getElementById('mode') };
-const FRAME_W=128, FRAME_H=160, DIRS=['north','northeast','east','southeast','south','southwest','west','northwest'];
-
+const FRAME_W=96, FRAME_H=128, DIRS=['north','northeast','east','southeast','south','southwest','west','northwest'];
 function loadImage(src){ return new Promise(r=>{ const i=new Image(); i.onload=()=>r(i); i.src=src; }); }
+function dirFromVec(x,y){ const a=Math.atan2(y,x); const deg=(a*180/Math.PI+360)%360; const idx=Math.round(deg/45)%8;
+  return ['east','northeast','north','northwest','west','southwest','south','southeast'][idx]; }
 
-// Assets
-const BG = {}, HERO={idle:{}, walk:{}}, ZOMB={}, FX={} , VEH={};
-
+// ASSETS
+const BG=[], HERO={idle:{},walk:{}}, ZOMB={}, FX={};
 async function loadAssets(){
-  BG.sky = await loadImage('bg_sky.png');
-  BG.castle = await loadImage('bg_castle.png');
-  BG.ground = await loadImage('bg_ground.png');
-
-  for(const d of DIRS){
-    HERO.idle[d] = await loadImage(`hero_idle_${d}.png`);
-    HERO.walk[d] = await loadImage(`hero_walk_${d}.png`);
-  }
-  for(const z of ['worker','nurse','burned','rotting']){
-    ZOMB[z] = {
-      idle: await loadImage(`zombie_${z}_idle.png`),
-      walk: await loadImage(`zombie_${z}_walk.png`),
-    };
-  }
-  FX.blood = await loadImage('fx_blood_splatter.png');
-  VEH.idle = await loadImage('vehicle_transam_idle.png');
-  VEH.drive = await loadImage('vehicle_transam_drive.png');
+  for(const f of ['bg_level1.png','bg_level2.png','bg_level3.png']) BG.push(await loadImage(f));
+  for(const d of DIRS){ HERO.idle[d]=await loadImage(`hero_idle_${d}.png`); HERO.walk[d]=await loadImage(`hero_walk_${d}.png`); }
+  for(const z of ['worker','nurse','burned','rotting']) ZOMB[z]={ idle: await loadImage(`zombie_${z}_idle.png`), walk: await loadImage(`zombie_${z}_walk.png`) };
+  FX.muzzle = await loadImage('fx_muzzle.png'); FX.bullet = await loadImage('fx_bullet.png');
 }
 
-// Game state
-const state = {
-  mode:'foot',  // 'foot' or 'car'
-  hero:{ x: innerWidth/2, y: innerHeight/2, dir:'south', speed:2.4, hp:100 },
-  car:{ x: innerWidth/2+120, y: innerHeight/2+40, speed:3.8, dir:0, drivingFrame:0 },
-  bullets:[], enemies:[], kills:0, wave:1, time:0,
-  stick:{active:false,sx:0,sy:0,x:0,y:0}, aim:{x:1,y:0}
+// STATE
+const S={
+  level:0, time:0,
+  hero:{x:innerWidth/2,y:innerHeight/2,dir:'south',hp:100,speed:3},
+  stickL:{id:null,active:false,sx:0,sy:0,x:0,y:0},
+  stickR:{id:null,active:false,sx:0,sy:0,x:1,y:0,shooting:false},
+  bullets:[], enemies:[], kills:0, wave:1,
+  weapon:{name:'PISTOL', fireRate:220, bulletSpeed:8, spread:0, multi:1, lastShot:0}
 };
 
-function dirFromVec(x,y){
-  const a = Math.atan2(y, x); const deg=(a*180/Math.PI+360)%360; const idx=Math.round(deg/45)%8;
-  // map: 0E,1NE,2N,3NW,4W,5SW,6S,7SE
-  return ['east','northeast','north','northwest','west','southwest','south','southeast'][idx];
-}
+// Weapons
+const WEAPONS=[
+  {name:'PISTOL', fireRate:220, bulletSpeed:9, spread:0.02, multi:1},
+  {name:'SMG',    fireRate:90,  bulletSpeed:10, spread:0.07, multi:1},
+  {name:'SHOTGUN',fireRate:500, bulletSpeed:8, spread:0.15, multi:6},
+];
+let wpnIndex=0;
+function cycleWeapon(){ wpnIndex=(wpnIndex+1)%WEAPONS.length; Object.assign(S.weapon, WEAPONS[wpnIndex]); HUD.weapon.textContent=S.weapon.name; }
+document.getElementById('btnWpn').addEventListener('click', cycleWeapon);
 
-function drawParallax(){
-  // ground tile
-  const g = BG.ground;
-  for(let y=-(state.hero.y%1024)-1024; y<canvas.height+1024; y+=1024){
-    for(let x=-(state.hero.x%1024)-1024; x<canvas.width+1024; x+=1024){
-      ctx.drawImage(g, 0,0,1024,1024, x, y, 1024,1024);
-    }
+// Input - Mobile twin sticks
+canvas.addEventListener('touchstart',e=>{
+  for(const t of e.changedTouches){
+    if(t.clientX<innerWidth*0.45 && !S.stickL.active){ S.stickL={id:t.identifier,active:true,sx:t.clientX,sy:t.clientY,x:0,y:0}; }
+    else { S.stickR={id:t.identifier,active:true,sx:t.clientX,sy:t.clientY,x:0,y:0,shooting:true}; }
   }
-  // sky + castle parallax
-  ctx.drawImage(BG.sky, 0,0, BG.sky.width, BG.sky.height, 0,0, canvas.width, canvas.height);
-  const cx = -((state.hero.x*0.3)%canvas.width);
-  ctx.drawImage(BG.castle, 0,0, BG.castle.width, BG.castle.height, cx, 0, canvas.width*1.2, canvas.height);
-  ctx.drawImage(BG.castle, 0,0, BG.castle.width, BG.castle.height, cx+canvas.width*1.2, 0, canvas.width*1.2, canvas.height);
-}
+});
+canvas.addEventListener('touchmove',e=>{
+  for(const t of e.changedTouches){
+    if(S.stickL.active && t.identifier===S.stickL.id){ S.stickL.x=t.clientX-S.stickL.sx; S.stickL.y=t.clientY-S.stickL.sy; }
+    if(S.stickR.active && t.identifier===S.stickR.id){ S.stickR.x=t.clientX-S.stickR.sx; S.stickR.y=t.clientY-S.stickR.sy; }
+  }
+});
+function endStick(id){ if(S.stickL.id===id) S.stickL={id:null,active:false,sx:0,sy:0,x:0,y:0}; if(S.stickR.id===id) S.stickR={id:null,active:false,sx:0,sy:0,x:0,y:0,shooting:false}; }
+canvas.addEventListener('touchend',e=>{ for(const t of e.changedTouches) endStick(t.identifier); });
+canvas.addEventListener('touchcancel',e=>{ for(const t of e.changedTouches) endStick(t.identifier); });
 
-function drawSheet(img, frames, x,y, fps=6){
-  const idx = Math.floor((state.time/1000)*fps) % frames;
-  ctx.drawImage(img, idx*FRAME_W, 0, FRAME_W, FRAME_H, x-FRAME_W/2, y-FRAME_H/2, FRAME_W, FRAME_H);
-}
+// Desktop: WASD + Mouse aim + hold LMB to fire
+const keys={};
+addEventListener('keydown',e=>{ keys[e.key.toLowerCase()]=true; if(e.key===' ') e.preventDefault(); });
+addEventListener('keyup',e=>{ keys[e.key.toLowerCase()]=false; });
+canvas.addEventListener('mousemove',e=>{ S.stickR.active=true; S.stickR.x=e.clientX-S.hero.x; S.stickR.y=e.clientY-S.hero.y; });
+let mouseDown=false;
+canvas.addEventListener('mousedown',e=>{ if(e.button===0){ mouseDown=true; S.stickR.active=true; S.stickR.shooting=true; } });
+addEventListener('mouseup',e=>{ if(e.button===0){ mouseDown=false; S.stickR.shooting=false; } });
 
+// Spawn logic
 function spawnEnemy(){
-  const names = ['worker','nurse','burned','rotting'];
-  const name = names[Math.floor(Math.random()*names.length)];
-  const side = Math.floor(Math.random()*4);
+  const types=['worker','nurse','burned','rotting'];
+  const t=types[Math.floor(Math.random()*types.length)];
+  const pad=120;
+  const side=Math.floor(Math.random()*4);
   let x=0,y=0;
-  if(side===0){ x=-100; y=Math.random()*canvas.height; }
-  if(side===1){ x=canvas.width+100; y=Math.random()*canvas.height; }
-  if(side===2){ x=Math.random()*canvas.width; y=-120; }
-  if(side===3){ x=Math.random()*canvas.width; y=canvas.height+120; }
-  state.enemies.push({ x,y,set:name, hp:30, speed:1.0+Math.random()*0.5, dir:'south' });
+  if(side===0){x=-pad;y=Math.random()*canvas.height;}
+  if(side===1){x=canvas.width+pad;y=Math.random()*canvas.height;}
+  if(side===2){x=Math.random()*canvas.width;y=-pad;}
+  if(side===3){x=Math.random()*canvas.width;y=canvas.height+pad;}
+  const speed=1+Math.random()*0.7 + S.wave*0.05;
+  S.enemies.push({x,y,type:t,hp:30+S.wave*5,speed,dir:'south',hurt:0});
 }
 
-function shoot(){
-  const angle = Math.atan2(state.aim.y, state.aim.x);
-  const speed = 7;
-  let x=state.hero.x, y=state.hero.y-20;
-  if(state.mode==='car'){ x=state.car.x; y=state.car.y-10; }
-  state.bullets.push({ x,y, vx:Math.cos(angle)*speed, vy:Math.sin(angle)*speed, life:140 });
-}
-
-function update(dt){
-  // input movement (virtual stick, clamped)
-  let mx = Math.max(-1, Math.min(1, state.stick.x/60));
-  let my = Math.max(-1, Math.min(1, state.stick.y/60));
-  // hero or car
-  if(state.mode==='foot'){
-    state.hero.x += mx*state.hero.speed;
-    state.hero.y += my*state.hero.speed;
-    if(mx||my) state.hero.dir = dirFromVec(mx,my);
-  }else{
-    state.car.x += mx*state.car.speed;
-    state.car.y += my*state.car.speed;
-    state.car.drivingFrame = (state.car.drivingFrame+dt*0.01)%3;
+// Shooting
+function tryShoot(t){
+  const w=S.weapon;
+  if(t - w.lastShot < w.fireRate) return;
+  w.lastShot=t;
+  const aimx = S.stickR.active ? S.stickR.x : 1;
+  const aimy = S.stickR.active ? S.stickR.y : 0;
+  const ang = Math.atan2(aimy,aimx);
+  for(let i=0;i<w.multi;i++){
+    const a = ang + (Math.random()-0.5)*w.spread*2;
+    S.bullets.push({ x:S.hero.x, y:S.hero.y-16, vx:Math.cos(a)*w.bulletSpeed, vy:Math.sin(a)*w.bulletSpeed, life:120, dmg: (w.name==='SHOTGUN'?14:18) });
   }
+}
 
-  // bullets
-  for(const b of state.bullets){ b.x+=b.vx; b.y+=b.vy; b.life--; }
-  state.bullets = state.bullets.filter(b=>b.life>0 && b.x>-100 && b.x<canvas.width+100 && b.y>-120 && b.y<canvas.height+120);
+// Update
+function update(dt,t){
+  // Level change by kills
+  if(S.kills>40) S.level=2; else if(S.kills>15) S.level=1; else S.level=0;
 
-  // enemies seek hero (or car)
-  const tx = state.mode==='foot' ? state.hero.x : state.car.x;
-  const ty = state.mode==='foot' ? state.hero.y : state.car.y;
-  for(const z of state.enemies){
-    const dx = tx - z.x, dy = ty - z.y; const dn = Math.hypot(dx,dy)||1;
-    z.x += (dx/dn)*z.speed; z.y += (dy/dn)*z.speed;
-    z.dir = dirFromVec(dx,dy);
+  // Movement
+  let mx=0,my=0;
+  if(S.stickL.active){ mx=S.stickL.x; my=S.stickL.y; }
+  else{ // keyboard
+    if(keys['w']||keys['arrowup']) my-=1;
+    if(keys['s']||keys['arrowdown']) my+=1;
+    if(keys['a']||keys['arrowleft']) mx-=1;
+    if(keys['d']||keys['arrowright']) mx+=1;
+  }
+  const mag=Math.hypot(mx,my)||1;
+  mx/=mag; my/=mag;
+  S.hero.x += mx*S.hero.speed; S.hero.y += my*S.hero.speed;
+  if(Math.abs(mx)>0.01||Math.abs(my)>0.01) S.hero.dir=dirFromVec(mx,my);
+
+  // Shooting hold
+  if((S.stickR.active && S.stickR.shooting) || mouseDown){ tryShoot(t); }
+
+  // Bullets
+  for(const b of S.bullets){ b.x+=b.vx; b.y+=b.vy; b.life--; }
+  S.bullets = S.bullets.filter(b=>b.life>0 && b.x>-100 && b.x<canvas.width+100 && b.y>-120 && b.y<canvas.height+120);
+
+  // Enemies
+  if(S.enemies.length < 8 + S.wave*2) spawnEnemy();
+  const target=S.hero;
+  for(const e of S.enemies){
+    const dx=target.x-e.x, dy=target.y-e.y; const dn=Math.hypot(dx,dy)||1;
+    e.x += (dx/dn)*e.speed; e.y += (dy/dn)*e.speed;
+    e.dir=dirFromVec(dx,dy);
     // bullet hit
-    for(const b of state.bullets){
-      if(Math.abs(b.x-z.x)<28 && Math.abs(b.y-z.y)<36){ z.hp-=20; b.life=0; }
+    for(const b of S.bullets){
+      if(Math.abs(b.x-e.x)<24 && Math.abs(b.y-e.y)<32){ e.hp-=b.dmg; b.life=0; e.hurt=100; }
     }
+    // touch damage
+    if(Math.abs(target.x-e.x)<28 && Math.abs(target.y-e.y)<40){ S.hero.hp = Math.max(0, S.hero.hp-0.05*dt); }
   }
   // deaths
-  const alive=[]; for(const z of state.enemies){ if(z.hp<=0){ state.kills++; } else alive.push(z); } state.enemies=alive;
-  // waves
-  if(state.enemies.length<8+state.wave) spawnEnemy();
+  const alive=[]; for(const e of S.enemies){ if(e.hp<=0){ S.kills++; } else alive.push(e); } S.enemies=alive;
 
-  HUD.kills.textContent = state.kills;
-  HUD.wave.textContent = state.wave;
-  HUD.hp.textContent = state.hero.hp;
-  HUD.mode.textContent = state.mode==='foot' ? 'ON FOOT' : 'IN CAR';
+  // waves scale by time
+  if(t%60000<16) S.wave++;
+
+  HUD.kills.textContent=S.kills|0; HUD.wave.textContent=S.wave; HUD.hp.textContent=S.hero.hp|0;
 }
 
+// Draw
+function drawSheet(img,frames,x,y,fps=8){ const idx=Math.floor(performance.now()/1000*fps)%frames; ctx.drawImage(img,idx*FRAME_W,0,FRAME_W,FRAME_H,x-FRAME_W/2,y-FRAME_H/2,FRAME_W,FRAME_H); }
 function render(){
-  drawParallax();
+  // bg
+  const bg=BG[S.level]; ctx.drawImage(bg,0,0,canvas.width,canvas.height);
   // bullets
-  ctx.fillStyle='#f4d'; for(const b of state.bullets){ ctx.fillRect(b.x-2,b.y-2,4,4); }
+  for(const b of S.bullets){ ctx.drawImage(FX.bullet, b.x-8, b.y-8); }
   // enemies
-  for(const z of state.enemies){
-    const anim = ZOMB[z.set].walk;
-    drawSheet(anim, 4, z.x, z.y, 6);
-  }
-  // hero/car
-  if(state.mode==='foot'){
-    const anim = (Math.abs(state.stick.x)>2||Math.abs(state.stick.y)>2) ? HERO.walk[state.hero.dir] : HERO.idle[state.hero.dir];
-    drawSheet(anim, anim.width/FRAME_W, state.hero.x, state.hero.y, 6);
-  }else{
-    const f = Math.floor(state.car.drivingFrame)%3;
-    ctx.drawImage(VEH.drive, f*FRAME_W, 0, FRAME_W, FRAME_H, state.car.x-FRAME_W/2, state.car.y-FRAME_H/2, FRAME_W, FRAME_H);
-  }
+  for(const e of S.enemies){ drawSheet(ZOMB[e.type].walk,4,e.x,e.y,6); }
+  // hero
+  const moving = (Math.abs(S.stickL.x)>4||Math.abs(S.stickL.y)>4) || keys['w']||keys['a']||keys['s']||keys['d']||keys['arrowup']||keys['arrowdown']||keys['arrowleft']||keys['arrowright'];
+  const himg = moving ? HERO.walk[S.hero.dir] : HERO.idle[S.hero.dir];
+  drawSheet(himg, moving?4:2, S.hero.x, S.hero.y, moving?8:4);
 }
 
-// Input
-canvas.addEventListener('touchstart', e=>{
-  for(const t of e.changedTouches){
-    const x=t.clientX, y=t.clientY;
-    if(x<innerWidth*0.6){ state.stick.active=true; state.stick.sx=x; state.stick.sy=y; state.stick.x=0; state.stick.y=0; }
-    else { state.aim.x=x-(state.mode==='foot'?state.hero.x:state.car.x); state.aim.y=y-(state.mode==='foot'?state.hero.y:state.car.y); shoot(); }
-  }
-});
-canvas.addEventListener('touchmove', e=>{ for(const t of e.changedTouches){ if(state.stick.active){ state.stick.x=t.clientX-state.stick.sx; state.stick.y=t.clientY-state.stick.sy; } } });
-canvas.addEventListener('touchend', e=>{ state.stick.active=false; state.stick.x=0; state.stick.y=0; });
-
-canvas.addEventListener('mousemove', e=>{ state.aim.x=e.clientX-(state.mode==='foot'?state.hero.x:state.car.x); state.aim.y=e.clientY-(state.mode==='foot'?state.hero.y:state.car.y); });
-canvas.addEventListener('mousedown', e=>{ if(e.button===0) shoot(); });
-
-// Buttons
-document.getElementById('btnShoot').addEventListener('click', shoot);
-document.getElementById('btnEnter').addEventListener('click', ()=>{
-  state.mode = state.mode==='foot' ? 'car' : 'foot';
-});
-
+// Main loop
 let last=performance.now();
-async function main(){
-  await loadAssets();
-  requestAnimationFrame(loop);
-}
-function loop(t){
-  const dt = t-last; last=t; state.time=t;
-  update(dt); render();
-  requestAnimationFrame(loop);
-}
+async function main(){ await loadAssets(); requestAnimationFrame(loop); }
+function loop(t){ const dt=t-last; last=t; S.time=t; update(dt,t); render(); requestAnimationFrame(loop); }
 main();
